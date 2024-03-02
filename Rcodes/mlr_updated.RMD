@@ -23,7 +23,30 @@ library(caret)
 
 import the input file
 ```{r}
-mlrinput <- read_excel("C:/soil-texture-map-french-guiana/data/field198_mlr.xlsx", sheet = 1)
+mlrinput <- read_excel("C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/data/field198_mlr.xlsx", sheet = 1)
+```
+
+
+plotting correlation between lab analysed sand and clay percentages
+
+
+```{r}
+corplot_sacl <- ggplot(mlrinput) +
+  geom_point(aes(x = clay, y = sand), color = ifelse(mlrinput$silt > 55, "green", "purple")) +
+  geom_abline(slope = -1, intercept = 100, linetype = "dashed") +
+  stat_poly_line(aes(x = clay, y = sand), color = "purple") +
+  stat_poly_eq(aes(x = clay, y = sand), label.x.npc = "right", label.y.npc = c(0.9, 0.85), color = "purple4", size = 6) +
+  labs(x = "Clay (%)", y = "Sand (%)") +
+  lims(x = c(0, 100), y = c(0, 100)) +
+  geom_text_repel(data = subset(mlrinput, silt > 65), aes(x = clay, y = sand, label = SITE), color = "black", size = 3.5) +
+  guides(color = FALSE)+
+   theme(legend.position = c(0.85, 0.2), 
+    legend.background = element_rect(fill = "white", color = "black"), panel.background = element_rect(fill = "white"), panel.grid = element_line(color = "gray", linetype = "dotted"),  axis.text = element_text(size = 12), axis.title = element_text(size = 14), legend.text = element_text(size = 13))+
+  coord_fixed()
+
+corplot_sacl
+
+ggsave(plot = corplot_sacl, device = "png", "C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/outputs/corplot_sacl.png", dpi = 600)
 ```
 
 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -123,6 +146,88 @@ cor(mlrinput$sand, mlrinput$pred_sand)
 cor(mlrinput$clay, mlrinput$pred_clay)
 ```
 
+calculating silt as 100- pred cl - pred sand
+
+```{r}
+mlrinput$diffsi <- 110 - mlrinput$pred_sand - mlrinput$pred_clay
+```
+
+as finding difference from 100 occasionally leads negative values in silt, we distribute the sum difference from 100 across the three components based on the weightage/ratio of each component
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+as there are negative values in the calculated silt contents, we adjust the percentage of each component according to its weightage/fraction in each sample
+
+```{r}
+sumpred <- mlrinput$pred_clay + mlrinput$pred_sand + mlrinput$diffsi
+difference <- 100 - sumpred
+weight_sand <- mlrinput$pred_sand/sumpred
+weight_clay <- mlrinput$pred_clay/sumpred
+weight_diffsilt <- mlrinput$diffsi/sumpred
+```
+
+adjusted texture
+
+```{r}
+mlrinput$adj_sa <- mlrinput$pred_sand + (difference*weight_sand)
+mlrinput$adj_cl <- mlrinput$pred_clay + (difference*weight_clay)
+mlrinput$adj_diffsi <- mlrinput$diffsi + (difference*weight_diffsilt)
+```
+
+
+CVing silt
+```{r include=FALSE}
+formula_silt <- as.formula("silt ~ adj_diffsi")
+
+model_silt <- train(formula_silt, data = mlrinput, method = "lm", trControl = mlrctrl)
+summary(model_silt)
+```
+
+plotting the results
+
+R squared
+```{r}
+r2mlrsand <- round(mlrsand_model$results$Rsquared, 2)
+r2mlrcl_sa<- round(mlrclay_model$results$Rsquared, 2)
+r2si_diffcv <- round(model_silt$results$Rsquared, 2)
+```
+
+RMSE
+```{r}
+rmse_sa_cv <- round(mlrsand_model$results$RMSE, 2)
+rmse_cl_cv <- round(mlrclay_model$results$RMSE, 2)
+rmse_adjsi_cv <- round(model_silt$results$RMSE, 2)
+```
+
+
+```{r}
+combined_plotmlrnorcv <- ggplot(mlrinput) +
+  geom_point(aes(x = adj_sa, y = sand, color = "Sand")) +
+  geom_point(aes(x = adj_cl, y = clay, color = "Clay")) +
+  geom_point(aes(x = adj_diffsi, y = silt, color = "Silt")) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  stat_poly_line(aes(x = adj_sa, y = sand), color = "blue") +
+  stat_poly_line(aes(x = adj_cl, y = clay), color = "red") +
+  stat_poly_line(aes(x = adj_diffsi, y = silt), color = "green") +
+   annotate("text", x = 86, y = 100, label = paste("R² =",r2mlrsand), parse = FALSE, color = "blue", size = 5) +
+  annotate("text", x = 17, y = 100, label = paste("RMSE =",rmse_sa_cv,"%"), parse = FALSE, color = "blue", size = 5) +
+  annotate("text", x = 86, y = 94, label = paste("R² =",r2mlrcl_sa), parse = FALSE, color = "red", size = 5) +
+  annotate("text", x = 16, y = 94, label = paste("RMSE =",rmse_cl_cv,"%"), parse = FALSE, color = "red", size = 5) +
+  annotate("text", x = 86, y = 88, label = paste("R² =",r2si_diffcv), parse = FALSE, color = "green", size = 5) +
+  annotate("text", x = 17, y = 88, label = paste("RMSE =",rmse_adjsi_cv,"%"), parse = FALSE, color = "green", size = 5) +
+  labs(x = "Predicted using MLR (%)", y = "Observed (%)") +
+  lims(x = c(0, 100), y = c(0, 100)) +
+  scale_color_manual(values = c("blue", "red" , "green"),
+    labels = c("Sand", "Clay", "Silt"), name = "Texture")+
+  theme(legend.position = c(0.85, 0.2), 
+    legend.background = element_rect(fill = "white", color = "black"), panel.background = element_rect(fill = "white"), panel.grid = element_line(color = "gray", linetype = "dotted"),  axis.text = element_text(size = 12), axis.title = element_text(size = 14), legend.text = element_text(size = 13))+
+  coord_fixed()
+combined_plotmlrnorcv
+
+ggsave(plot = combined_plotmlrnorcv, device = "png", "C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/outputs/combined_plotmlrnorcv_adjnorm.png", dpi = 900)
+```
+
+
+
 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 using the above developed models to predict sand and clay at 2810 (all in-situ observations)
@@ -131,7 +236,7 @@ using the above developed models to predict sand and clay at 2810 (all in-situ o
 loading the file
 
 ```{r}
-insitu2810 <- read_excel("C:/soil-texture-map-french-guiana/data/field2810.xlsx", sheet = 1)
+insitu2810 <- read_excel("C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/data/field2810.xlsx", sheet = 1)
 ```
 renaming col names
 
@@ -243,9 +348,11 @@ sol421_utm <- avg_IDSOIL_utm %>%
 saving the output
 
 ```{r}
-write.csv(sol421_utm, "C:/soil-texture-map-french-guiana/outputs/sol421_utm.csv")
+write.csv(sol421_utm, "C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/outputs/sol421_utm.csv")
 ```
 
 
 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
 
