@@ -1,0 +1,251 @@
+---
+title: "Soil MLR with predictors normalised"
+author: "Salman"
+date: "2023-12-03"
+output: html_document
+---
+
+Required libraries
+```{r include=FALSE}
+library(MASS)
+library(ggplot2)
+library(dplyr)
+library(ggpmisc)
+library(readxl)
+library(caTools)
+library(regclass)
+library(glue)
+library(tibble)
+library(caret)
+```
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+import the input file
+```{r}
+mlrinput <- read_excel("C:/soil-texture-map-french-guiana/data/field198_mlr.xlsx", sheet = 1)
+```
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+normalising the in-situ observations used as predictors between 0 to 1 using min-max normlisation. mutate function from dplyr package
+
+```{r}
+normalize <- function(x) {
+  if (is.data.frame(x)) {
+    x %>% 
+      mutate(across(everything(), ~ (.-min(.))/(max(.)-min(.)), .names = "norm_{.col}"))
+  } else {
+    (x - min(x)) / (max(x) - min(x))
+  }}
+```
+
+
+```{r}
+mlrinput <- mlrinput %>%
+  mutate(across(10:16, ~ (.-min(.))/(max(.)-min(.)), .names = "norm_{.col}")) # min-max normalisation
+```
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+creating the train control for k-fold random CV
+
+```{r}
+mlrctrl <- trainControl(method = "cv", number = 5) 
+```
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++MLR model to predict sand
+
+defining the covariates for sand model
+
+```{r}
+mlrsand_cov <- c("norm_rankcl", "norm_ranksi", "norm_ranksa", "norm_value", "norm_chroma", "norm_lith", "norm_cuirass")
+```
+
+
+sand content as a function of above field observations
+
+```{r}
+formula_mlrsand <- as.formula(paste("sand ~", paste(mlrsand_cov, collapse = " + ")))
+```
+
+building the sand model with 5 fold random CV
+
+```{r}
+mlrsand_model <- train(formula_mlrsand, data = mlrinput, method = "lmStepAIC", trControl = mlrctrl)
+summary(mlrsand_model)
+```
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++MLR model to predict clay, using observed clay as an add covariate
+
+normalising sand values
+
+```{r}
+mlrinput$norm_sand <- normalize(mlrinput$sand)
+```
+
+
+
+defining the covariates for clay model
+
+```{r}
+mlrclay_cov <- c("norm_sand", "norm_rankcl", "norm_ranksi", "norm_ranksa", "norm_value", "norm_chroma", "norm_lith", "norm_cuirass")
+```
+
+
+sand content as a function of above field observations
+
+```{r}
+formula_mlrclay <- as.formula(paste("clay ~", paste(mlrclay_cov, collapse = " + ")))
+```
+
+building the sand model with 5 fold random CV
+
+```{r}
+mlrclay_model <- train(formula_mlrclay, data = mlrinput, method = "lmStepAIC", trControl = mlrctrl)
+summary(mlrclay_model)
+```
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+developed MLR models to predict sand and clay at 198 points
+
+```{r}
+mlrinput$pred_sand <- predict(mlrsand_model, mlrinput)
+```
+
+```{r}
+mlrinput$pred_clay <- predict(mlrclay_model, mlrinput)
+```
+correlations bw predicted and observed values of sand and clay
+```{r}
+cor(mlrinput$sand, mlrinput$pred_sand)
+cor(mlrinput$clay, mlrinput$pred_clay)
+```
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+using the above developed models to predict sand and clay at 2810 (all in-situ observations)
+
+
+loading the file
+
+```{r}
+insitu2810 <- read_excel("C:/soil-texture-map-french-guiana/data/field2810.xlsx", sheet = 1)
+```
+renaming col names
+
+```{r}
+insitu2810 <- insitu2810 %>%
+  rename(IDSOIL = 1, SITE = 2)
+```
+
+
+omitting unused/unnecessary columns
+
+```{r}
+insitu2810_select <- insitu2810 %>%
+  dplyr::select(IDSOIL, SITE, SONDAGE, lyr, rankcl, ranksi, ranksa, value, chroma, lith, cuirass)
+```
+
+normalising columns with values used as predictors
+
+```{r}
+insitu2810_select <- insitu2810_select %>%
+  mutate(across(5:11, ~ (.-min(.))/(max(.)-min(.)), .names = "norm_{.col}")) # min-max normalisation
+```
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+predicting sand at 2810 points 
+
+```{r}
+insitu2810_select$pred_sand <- predict(mlrsand_model, insitu2810_select )
+```
+
+and to predict clay, we first normalise the (predicted) sand column
+
+
+```{r}
+insitu2810_select$norm_sand <- normalize(insitu2810_select$pred_sand)
+```
+
+predicting clay at 2810 points 
+
+```{r}
+insitu2810_select$pred_clay <- predict(mlrclay_model, insitu2810_select)
+```
+
+silt as the difference  ie 100 - sand - clay
+
+```{r}
+insitu2810_select$diff_silt <- 100 - insitu2810_select$pred_sand -insitu2810_select$pred_clay
+```
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+sand, silt and clay contents averaged across each soil profile
+
+adding the depth of each layer to the df
+
+```{r}
+insitu2810_select <- insitu2810_select %>%
+  mutate(lyr_dep = case_when(lyr == 1 ~ 100, lyr == 2 ~ 100, lyr == 3 ~ 200, lyr == 4 ~ 200, lyr == 5 ~ 200, lyr == 6 ~ 200, lyr == 7 ~ 200))
+```
+
+total depth of each soil profile
+
+```{r}
+insitu2810_select <- insitu2810_select %>%
+  group_by(IDSOIL) %>%
+  mutate(tot_dep = sum(lyr_dep, na.rm = TRUE))
+```
+
+relative proportion of each layer across the entire depth
+
+```{r}
+insitu2810_select$wt_lyr <- insitu2810_select$lyr_dep/ insitu2810_select$tot_dep
+```
+
+weighted average of sand, silt and clay in each soil profile
+
+```{r}
+avg_IDSOIL <- insitu2810_select %>%
+  group_by(IDSOIL, SONDAGE, SITE) %>%
+  summarise(avg_sand = weighted.mean(pred_sand, wt = wt_lyr, na.rm = TRUE), avg_silt = weighted.mean(diff_silt, wt = wt_lyr, na.rm = TRUE), avg_clay = weighted.mean(pred_clay, wt = wt_lyr, na.rm = TRUE))
+```
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+adding UTM coordinates to the dataset
+
+
+
+```{r}
+avg_IDSOIL_utm <- merge(avg_IDSOIL, insitu2810[, c("IDSOIL", "xutm22N", "yutm22N")], by = "IDSOIL", all.x = TRUE)
+```
+
+```{r}
+avg_IDSOIL_utm <- avg_IDSOIL_utm[!duplicated(avg_IDSOIL_utm$IDSOIL), ]
+```
+
+```{r}
+avg_IDSOIL_utm$xutm22N <- as.numeric(avg_IDSOIL_utm$xutm22N)
+avg_IDSOIL_utm$yutm22N <- as.numeric(avg_IDSOIL_utm$yutm22N)
+```
+
+
+removing removes with missing lat/long values
+```{r}
+sol421_utm <- avg_IDSOIL_utm %>%
+  filter(complete.cases(xutm22N, yutm22N))
+```
+saving the output
+
+```{r}
+write.csv(sol421_utm, "C:/soil-texture-map-french-guiana/outputs/sol421_utm.csv")
+```
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
