@@ -1,0 +1,634 @@
+---
+title: "RF Model Cleaned"
+author: "Salman"
+date: "2023-09-15"
+output: html_document
+---
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+The following code trains RF models for sand and clay predictions, calculates silt, spatially predict textural components over French Guiana, and visualizes the importance of predictors
+
+```{r setup, include=FALSE}
+library(terra)
+library(dplyr)
+library(raster)
+library(caret)
+library(CAST)
+library(party)
+library(spdep)
+library(randomForest)
+library(pdp)
+library(ggplot2)
+library(ggpmisc)
+library(ggrepel)
+library(stringr)
+library(readxl)
+```
+
+loading the input dataset. the dataset contains sand, silt and clay percentages at 499 points, and the values of eight covariates at the corresponding points. Among the 499 points, 67 complete soil profiles were taken from Guyafor project, 11 from WOSIS dataset, while the remaining 421 were estimated using multiple linear regression models from the 2810 measurements (different depths) of in-situ observation of soil texture
+```{r}
+sol499_mlrcv <- read_excel("C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/data/sol499.xlsx", sheet = 1)
+```
+
+```{r}
+#sol499_alrcv <- read.csv("D:/metradica-soils/R/sol499_alr_zone.csv")
+```
+removing three WOSIS profiles located in swamp
+```{r}
+sol496_mlrcv <- subset(sol499_mlrcv, !(new_ID %in% c(71392, 71393, 70812)))
+```
+```{r}
+sol496_alrcv <- subset(sol499_alrcv, !(new_ID %in% c(71392, 71393, 70812)))
+```
+
+creating a dataframe with covariates only
+```{r}
+env496_mlrv <- sol496_mlrcv[,11:18]
+```
+defining qualitative variables as factors
+```{r}
+env496_mlrv[,6:8] <- lapply(env496_mlrv[,6:8], as.factor)
+```
+extracting the measured values of textural components
+```{r}
+res.sand496.mlrcv <- sol496_mlrcv$sand
+res.clay496.mlrcv <- sol496_mlrcv$clay
+res.silt496.mlrcv <- sol496_mlrcv$silt
+```
+defining geographical zones for spatial CV. The entire region was divided into 12 zones with each grid of 0.5 x 0.5 degrees
+```{r}
+zone12 <- CreateSpacetimeFolds(sol496_mlrcv, spacevar = "zone12", k = length(unique(sol496_mlrcv$zone12)))
+```
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+control function for spatial CV
+```{r}
+ctrl.zone12 <- trainControl(method = "cv", number = 10, verboseIter = TRUE, index = zone12$index, indexOut = zone12$indexOut)
+```
+tuning parameter
+```{r}
+tuneGrid8 <- expand.grid(mtry = seq(from = 1, to = 8, by = 1))
+```
+control function for random CV
+
+```{r}
+ctrl.random <- trainControl(method = "cv", number = 10, verboseIter = TRUE)
+```
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Training an RF model for sand prediction, using random CV
+```{r include=FALSE}
+rf.sand.496.random.mlrcv <- train(env496_mlrv, res.sand496.mlrcv, method = "cforest", metric = "Rsquared", controls = cforest_control(mtry = 0), trControl = ctrl.random, tuneGrid = tuneGrid8)
+rf.sand.496.random.mlrcv
+```
+
+sand as an additional variable
+```{r}
+env496_mlrv.corsa <- cbind(env496_mlrv, sol496_mlrcv$sand)
+```
+
+```{r}
+colnames(env496_mlrv.corsa)[9] <- "sand"
+```
+
+Training an RF model for clay prediction with sand as an additional predictor, with random CV
+
+```{r include=FALSE}
+rf.clay.496.random.mlrcv <- train(env496_mlrv.corsa, res.clay496.mlrcv, method = "cforest", metric = "Rsquared", controls = cforest_control(mtry = 0), trControl = ctrl.random, tuneGrid = tuneGrid8)
+rf.clay.496.random.mlrcv
+```
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+Training an RF model for sand prediction, using spatial CV
+```{r include=FALSE}
+rf.sand.496.spatial.mlrcv <- train(env496_mlrv, res.sand496.mlrcv, method = "cforest", metric = "Rsquared", controls = cforest_control(mtry = 0), trControl = ctrl.zone12, tuneGrid = tuneGrid8)
+rf.sand.496.spatial.mlrcv
+```
+
+Training an RF model for clay prediction with sand as an additional predictor, with spatial CV
+
+```{r include=FALSE}
+rf.clay.496.spatial.mlrcv <- train(env496_mlrv.corsa, res.clay496.mlrcv, method = "cforest", metric = "Rsquared", controls = cforest_control(mtry = 0), trControl = ctrl.zone12, tuneGrid = tuneGrid8)
+rf.clay.496.spatial.mlrcv
+```
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+RF models with qualitative variables converted to quantitative variables
+tuning parameter 
+```{r}
+tuneGrid30 <- expand.grid(mtry = seq(from = 1, to = 30, by = 2))
+```
+
+Training an RF model for sand prediction, using random CV
+
+```{r include=FALSE}
+rf.sand.496.random.mlrcv.quant <- train(env496quant, res.sand496.mlrcv, method = "cforest", metric = "Rsquared", controls = cforest_control(mtry = 0), trControl = ctrl.random, tuneGrid = tuneGrid30)
+rf.sand.496.random.mlrcv.quant
+```
+adding sand to the list of predictors for clay model
+```{r}
+env496quant.corsa.mlrcv <- cbind(env496quant,sol496_mlrcv$sand)
+```
+renaming the column 
+```{r}
+colnames(env496quant.corsa.mlrcv)[35] <- "sand"
+```
+
+Training an RF model for clay prediction with sand as an additional covariate, using random CV
+```{r include=FALSE}
+rf.clay.496.random.quantmlrcv <- train(env496quant.corsa.mlrcv, res.clay496.mlrcv, method = "cforest", metric = "Rsquared", controls = cforest_control(mtry = 0), trControl = ctrl.random, tuneGrid = tuneGrid30)
+rf.clay.496.random.quantmlrcv
+```
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+importing raster data of predictors used in model training
+
+qualitative variables had been converted to quantitative 
+altitude/ elevation
+```{r}
+alt <- rast("D:/repeated/rfquantat1km/raster1km/alt.tif")
+```
+```{r}
+names(alt) <- "alt"
+```
+
+regional elevation, hand index, slope and precipitation
+```{r}
+rel <- rast("D:/repeated/rfquantat1km/raster1km/rel.tif")
+hd1 <- rast("D:/repeated/rfquantat1km/raster1km/hd1.tif")
+slo <- rast("D:/repeated/rfquantat1km/raster1km/slo.tif")
+rfc <- rast("D:/repeated/rfquantat1km/raster1km/rfc.tif")
+```
+```{r}
+names(rel) <- "rel"
+names(hd1) <- "hd1"
+names(slo) <- "slo"
+names(rfc) <- "rfc"
+```
+
+geology, landscape and geomorphon variables
+```{r}
+gos <- rast("D:/repeated/rfquantat1km/raster1km/gos9up.tif")
+lsc <- rast("D:/repeated/rfquantat1km/raster1km/lscup.tif")
+GM_100m <- rast("D:/repeated/rfquantat1km/raster1km/GM_100mup.tif")
+```
+
+stacking the rasters of all predictors
+
+```{r}
+stack.sand <- c(alt, rel,rfc, hd1, slo,  gos, lsc, GM_100m)
+```
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+predicitng sand over FG
+
+```{r}
+sand496mlrcv.fg <- predict(stack.sand, rf.sand.496.random.mlrcv.quant, fun = predict, na.rm = TRUE)
+```
+renaming the predicted map 
+```{r}
+names(sand496mlrcv.fg) <- "sand"
+```
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++creating raster stack for clay model
+
+```{r}
+stack.clay.corsa <- c(alt, rel,rfc, hd1, slo,  gos, lsc, GM_100m, sand496mlrcv.fg)
+```
+
+predicting clay over FG
+
+```{r}
+clay496mlrcv.corsa.fg <- predict(stack.clay.corsa, rf.clay.496.random.quantmlrcv, fun = predict, na.rm = TRUE)
+```
+
+```{r}
+names(clay496mlrcv.corsa.fg) <- "clay"
+```
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+calculating silt as 100 - sand - clay
+
+```{r}
+silt496.mlrcv.diff.fg <- 100 - sand496mlrcv.fg - clay496mlrcv.corsa.fg
+```
+```{r}
+names(silt496.mlrcv.diff.fg)  <- "silt"
+```
+saving the output
+
+```{r}
+writeRaster(sand496mlrcv.fg, "C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/outputs/sand496mlc.tif")
+writeRaster(clay496mlrcv.corsa.fg, "C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/outputs/clay496mlc_obsa.tif")
+writeRaster(silt496.mlrcv.diff.fg, "C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/outputs/silt496mlc_diff.tif")
+```
+
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+
+
+
+
+silt at 496 points as predicted by the sand and clay models
+sand predicted at 496 points
+```{r}
+sand496.point <- predict(rf.sand.496.random.mlrcv, env496)
+```
+clay predicted at 496 points
+```{r}
+clay496.point <- predict(rf.clay.496.random.mlrcv, env496_mlrv.corsa)
+```
+silt as the difference
+
+```{r}
+silt496.point <- 100 - sand496.point - clay496.point
+```
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+creating a dataframe with 496 point predictions
+
+```{r}
+point496_mlrcv <- cbind(sol496_mlrcv[,2:9], sand496.point, clay496.point, silt496.point, sol496_mlrcv[,18])
+```
+renaming the columns
+
+```{r}
+colnames(point496_mlrcv)[9] <- "pred_sand"
+colnames(point496_mlrcv)[10] <- "pred_clay"
+colnames(point496_mlrcv)[11] <- "diff_silt"
+colnames(point496_mlrcv)[12] <- "zone12"
+```
+
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++cross-validating silt
+creating a df with observed and predicted (diff) silt
+
+```{r}
+silt_data <- cbind(point496_mlrcv[8], point496_mlrcv[11])
+```
+
+
+silt model with random CV
+```{r include=FALSE}
+model_silt_random <- train(diff_silt ~ ., silt_data, method = "lm", trControl = ctrl.random)
+model_silt_random
+```
+
+silt model with spatial CV
+```{r include=FALSE}
+model_silt_spatial <- train(diff_silt ~ ., silt_data, method = "lm", trControl = ctrl.zone12)
+model_silt_spatial
+```
+
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+next section is to visualize partial dependance 
+
+defing labels for qualititative variables
+```{r}
+lsc_lbl <- c("High hill and Mountain", "Regular Pattern Hilly Area", "Hilly plateau with inselbergs", "Peneplain with moderate hill", "Moderate plateau with inselberg", "Inland plain", "Complex hilly area", "High dissected plateau", "Low hilly area and large valley", "Coastal plain")
+```
+partial dependance of sand model on landscape variable
+```{r}
+sandlsc.mlrcv <- partial(rf.sand.496.random.mlrcv, pred.var = c("lsc"), chull = TRUE)
+```
+adding the lsc labels
+```{r}
+sandlsc.mlrcv$label <- lsc_lbl
+```
+
+```{r}
+lbl_lsc_wrap.random <- str_wrap(sandlsc.mlrcv$label, width = 16)
+```
+
+PDP of lsc and sand predictions
+```{r}
+lscsand_mlrcv <- ggplot(data = sandlsc.mlrcv, aes(x = lsc, y = yhat)) +
+  geom_point(aes(xend = lsc, yend = 28), color = "black", size = 3) +
+  scale_x_discrete(labels = lbl_lsc_wrap.random, name = "Landscape") +
+  labs(y = "% Sand", title = "Partial Plot LSC vs Sand", size = 19) +
+ geom_segment(aes(xend = lsc, yend = 28), color = "blue", size = 0.8)+
+  theme(panel.background = element_rect(fill = "white", colour = "black"),  panel.grid = element_line(color = "black", linetype = "dotted"), axis.text = element_text(size = 17, angle = 90, vjust = 0.5, hjust=1),
+        axis.title = element_text(size = 19),
+        axis.ticks = element_line(size = 1),
+        plot.title = element_text(size = 20))+
+  scale_y_continuous(breaks = seq(30, max(60), by = 10), expand = c(0, 1))
+
+lscsand_mlrcv
+ggsave(plot = lscsand_mlrcv, device = "png", "C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/outputs/lscsand_mlrcvlrg.png", dpi = 900)
+```
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+predicted sand versus geology
+defining the labels for each gos class
+```{r}
+gos_lbl <- c("Recent Sediment", "Dikes", "Granite", "Gneiss", "Gabbros", "Quartizite & Sandstone", "Volcanic Sediments", "Metapelites", "Whitesand")
+```
+partial dependance of sand model on geology variable
+```{r}
+sandgos.mlrcv <- partial(rf.sand.496.random.mlrcv, pred.var = c("gos"), chull = TRUE)
+```
+```{r}
+sandgos.mlrcv$label <- gos_lbl
+```
+
+
+```{r}
+lbl_gos_wrap <- str_wrap(sandgos.mlrcv$label, width = 16)
+```
+PDP between sand prediction and geology
+```{r}
+gossand_mlrcv <- ggplot(data = sandgos.mlrcv, aes(x = gos, y = yhat)) +
+  geom_point(aes(xend = gos, yend = 28), color = "black", size = 3) +
+  scale_x_discrete(labels = lbl_gos_wrap, name = "Geological Substrate") +
+  labs(y = "% Sand", title = "Partial Plot GOS vs Sand", size = 19) +
+ geom_segment(aes(xend = gos, yend = 28), color = "blue", size = 0.8) +
+   theme(panel.background = element_rect(fill = "white", colour = "black"),  panel.grid = element_line(color = "black", linetype = "dotted"), axis.text = element_text(size = 17, angle = 90, vjust = 0.5, hjust=1),
+        axis.title = element_text(size = 19),
+        axis.ticks = element_line(size = 1),
+        plot.title = element_text(size = 20))+
+    scale_y_continuous(breaks = seq(30, 50, by = 10), limits = c(28, 50), expand = c(0, 1))
+
+gossand_mlrcv
+ggsave(plot = gossand_mlrcv, device = "png", "C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/outputs/gossand_mlrcvlrg.png", dpi = 900)
+```
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+```{r}
+sandrfc.mlrcv <- partial(rf.sand.496.random.mlrcv, pred.var = c("rfc"), chull = TRUE)
+```
+
+sand dependance on rfc (precipitation)
+
+```{r}
+rfcsand_mlrcv <- ggplot(data = sandrfc.mlrcv, aes(x = rfc, y = yhat)) +
+  geom_line(aes(xend = rfc, yend = 36), color = "blue", size = 0.8) +
+  labs(y = "% Sand", title = "Partial Plot PCP vs Sand", x = "Precipitation (mm)", size = 19)+
+  theme(panel.background = element_rect(fill = "white", colour = "black"),  panel.grid = element_line(color = "black", linetype = "dotted"), axis.text = element_text(size = 17),
+        axis.title = element_text(size = 19),
+        axis.ticks = element_line(size = 1),
+        plot.title = element_text(size = 20))+
+  scale_y_continuous(breaks = seq(30, 50, by = 10), limits = c(28, 50), expand = c(0, 1))
+
+rfcsand_mlrcv
+ggsave(plot = rfcsand_mlrcv, device = "png", "C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/outputs/rfcsand_mlrcvlrg.png", dpi = 600)
+```
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+sand dependance on slo 
+
+```{r}
+sandslo.mlrcv <- partial(rf.sand.496.random.mlrcv, pred.var = c("slo"), chull = TRUE)
+```
+
+```{r}
+slosand_mlrcv <- ggplot(data = sandslo.mlrcv, aes(x = slo, y = yhat)) +
+  geom_line(aes(xend = slo, yend = 36), color = "blue", size = 0.8) +
+  labs(y = "% Sand", title = "Partial Plot SLO vs Sand", x = "Slope (%)", size = 19) +
+  theme(panel.background = element_rect(fill = "white", colour = "black"),  panel.grid = element_line(color = "black", linetype = "dotted"), axis.text = element_text(size = 17),
+        axis.title = element_text(size = 19),
+        axis.ticks = element_line(size = 1),
+        plot.title = element_text(size = 20))+
+  scale_y_continuous(breaks = seq(30, 50, by = 10), limits = c(28, 50), expand = c(0, 1))
+
+slosand_mlrcv
+ggsave(plot = slosand_mlrcv, device = "png", "C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/outputs/slosand_mlrcvlrg.png", dpi = 600)
+```
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+clay RF dependance of sand
+
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+pdp between clay model and predicted sand as covariate
+
+```{r}
+pre.sand496 <- predict(rf.sand.496.random.mlrcv, env496_mlrv)
+```
+
+
+```{r}
+env496.corsa <- cbind(env496_mlrv, pre.sand496)
+```
+
+```{r include=FALSE}
+rf.clay.496.randomcorsa <- train(env496.corsa, res.clay496.mlrcv, method = "cforest", metric = "Rsquared", controls = cforest_control(mtry = 0), trControl = ctrl.random, tuneGrid = tuneGrid8)
+rf.clay.496.randomcorsa
+```
+
+
+```{r}
+claysa <- partial(rf.clay.496.randomcorsa, pred.var = c("pre.sand496"), chull = TRUE)
+```
+
+
+```{r}
+saclay <- ggplot(data = claysa, aes(x = pre.sand496, y = yhat)) +
+  geom_line(aes(xend = pre.sand496, yend = 20), color = "purple", size = 0.8) +
+  labs(y = "% Clay", title = "Partial Plot Sand vs Clay", x = "Predicted Sand (%)", size = 19) +
+  theme(panel.background = element_rect(fill = "white", colour = "black"),  panel.grid = element_line(color = "black", linetype = "dotted"), axis.text = element_text(size = 17),
+        axis.title = element_text(size = 19),
+        axis.ticks = element_line(size = 1),
+        plot.title = element_text(size = 20))+
+   coord_fixed() +
+  xlim(17, 70) + ylim(17, 70)
+
+saclay
+ggsave(plot = saclay, device = "png", "saclay496scllrg.png", dpi = 900)
+```
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+variable importance for both sand and clay models
+
+```{r}
+imp_rf_sand_mlrcv <- plot(varImp(rf.sand.496.random.mlrcv))
+imp_rf_clayobs_mlrcv <- plot(varImp(rf.clay.496.random.mlrcv))
+```
+
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+following code building RF models for ALRs was ultimately not used 
+
+
+
+```{r}
+sol496_alrrf <- sol496_alrcv
+```
+
+sol496 with alr and RF
+
+
+```{r}
+small_constant <- 1e-6
+```
+
+```{r}
+sol496_alrrf$alr_sand_rf <- log(sol496_alrrf$sand/pmax(sol496_alrrf$clay, small_constant))
+```
+
+```{r}
+sol496_alrrf$alr_silt_rf <- log(sol496_alrrf$silt/pmax(sol496_alrrf$clay, small_constant))
+```
+
+defining the response variables
+```{r}
+res.alrsand <- sol496_alrrf$alr_sand_rf
+res.alrsilt <- sol496_alrrf$alr_silt_rf
+```
+
+
+
+Training an RF model for alrsand, using random CV
+```{r include=FALSE}
+rf.alrsand.496.random <- train(env496_mlrv, res.alrsand, method = "cforest", metric = "Rsquared", controls = cforest_control(mtry = 0), trControl = ctrl.random, tuneGrid = tuneGrid8)
+rf.alrsand.496.random 
+```
+
+Training an RF model for alrsilt, using random CV
+```{r include=FALSE}
+rf.alrsilt.496.random <- train(env496_mlrv, res.alrsilt, method = "cforest", metric = "Rsquared", controls = cforest_control(mtry = 0), trControl = ctrl.random, tuneGrid = tuneGrid8)
+rf.alrsilt.496.random 
+```
+
+
+partial dependance of sand model on landscape variable
+```{r}
+alrsandlsc.mlrcv <- partial(rf.alrsand.496.random , pred.var = c("lsc"), chull = TRUE)
+```
+adding the lsc labels
+```{r}
+alrsandlsc.mlrcv$label <- lsc_lbl
+```
+```{r}
+lbl_lsc_wrap.random <- str_wrap(alrsandlsc.mlrcv$label, width = 16)
+```
+
+
+PDP of lsc and alrsand predictions
+```{r}
+lscalrsand_mlrcv <- ggplot(data = alrsandlsc.mlrcv, aes(x = lsc, y = yhat)) +
+  geom_point(aes(xend = lsc, yend = -0.75), color = "black", size = 3) +
+  scale_x_discrete(labels = lbl_lsc_wrap.random, name = "Landscape") +
+  labs(y = "% Sand", title = "Partial Plot LSC vs alrSand", size = 19) +
+ geom_segment(aes(xend = lsc, yend = -0.75), color = "blue", size = 0.8)+
+  theme(panel.background = element_rect(fill = "white", colour = "black"),  panel.grid = element_line(color = "black", linetype = "dotted"), axis.text = element_text(size = 17, angle = 90, vjust = 0.5, hjust=1),
+        axis.title = element_text(size = 19),
+        axis.ticks = element_line(size = 1),
+        plot.title = element_text(size = 20))+
+  scale_y_continuous(breaks = seq(-0.7, max(0.7), by = 0.7), expand = c(0, 1))
+
+lscalrsand_mlrcv
+ggsave(plot = lscalrsand_mlrcv, device = "png", "lscalrsand_mlrcv.png", dpi = 900)
+```
+
+
+partial dependance of sand model on landscape variable
+```{r}
+alrsandgos.mlrcv <- partial(rf.alrsand.496.random , pred.var = c("gos"), chull = TRUE)
+```
+adding the lsc labels
+```{r}
+alrsandgos.mlrcv$label <- gos_lbl
+```
+```{r}
+lbl_gos_wrap.random <- str_wrap(alrsandgos.mlrcv$label, width = 16)
+```
+
+
+PDP of gos and alrsand predictions
+```{r}
+gosalrsand_mlrcvscl <- ggplot(data = alrsandgos.mlrcv, aes(x = gos, y = yhat)) +
+  geom_point(aes(xend = gos, yend = -0.35), color = "black", size = 3) +
+  scale_x_discrete(labels = lbl_gos_wrap.random, name = "Landscape") +
+  labs(y = "% Sand", title = "Partial Plot GOS vs alrSand", size = 19) +
+ geom_segment(aes(xend = gos, yend = -0.35), color = "blue", size = 0.8)+
+  theme(panel.background = element_rect(fill = "white", colour = "black"),  panel.grid = element_line(color = "black", linetype = "dotted"), axis.text = element_text(size = 17, angle = 90, vjust = 0.5, hjust=1),
+        axis.title = element_text(size = 19),
+        axis.ticks = element_line(size = 1),
+        plot.title = element_text(size = 20))+
+  scale_y_continuous(breaks = seq(-0.3, max(0.3), by = 0.3), expand = c(0, 1))
+
+gosalrsand_mlrcvscl
+ggsave(plot = gosalrsand_mlrcvscl, device = "png", "gosalrsand_mlrcvscl.png", dpi = 900)
+```
+
+
+
+partial dependance of alrsand model on pcp variable
+```{r}
+alrsandrfc.mlrcv <- partial(rf.alrsand.496.random , pred.var = c("rfc"), chull = TRUE)
+```
+
+```{r}
+rfcalrsand <- ggplot(data = alrsandrfc.mlrcv , aes(x = rfc, y = yhat)) +
+  geom_line(aes(xend = rfc, yend = 0), color = "blue", size = 0.8) +
+  labs(y = "alrSand", title = "Partial Plot RFC vs Sand", x = "Precipitation (mm)", size = 19)+
+  theme(panel.background = element_rect(fill = "white", colour = "black"),  panel.grid = element_line(color = "black", linetype = "dotted"), axis.text = element_text(size = 17),
+        axis.title = element_text(size = 19),
+        axis.ticks = element_line(size = 1),
+        plot.title = element_text(size = 20))+
+  scale_y_continuous(breaks = seq(-0.3, 0.3, by = 0.3), expand = c(0, 0.3))
+
+rfcalrsand
+ggsave(plot = rfcalrsand, device = "png", "rfcalrsand.png", dpi = 600)
+```
+```{r}
+alrsiltrfc.mlrcv <- partial(rf.alrsilt.496.random , pred.var = c("rfc"), chull = TRUE)
+```
+```{r}
+rfcalrsilt <- ggplot(data = alrsiltrfc.mlrcv , aes(x = rfc, y = yhat)) +
+  geom_line(aes(xend = rfc, yend = yhat), color = "blue", size = 0.8) +
+  labs(y = "alrSilt", title = "Partial Plot RFC vs Sand", x = "Precipitation (mm)", size = 19) +
+  theme(panel.background = element_rect(fill = "white", colour = "black"),
+        panel.grid = element_line(color = "black", linetype = "dotted"),
+        axis.text = element_text(size = 17),
+        axis.title = element_text(size = 19),
+        axis.ticks = element_line(size = 1),
+        plot.title = element_text(size = 20)) +
+  scale_y_continuous(limits = c(-1.54, -1.42), breaks = seq(-1.6, -1.2, by = 0.05))
+
+rfcalrsilt
+ggsave(plot = rfcalrsilt, device = "png", "rfcalrsilt.png", dpi = 600)
+```
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+training the models for alrsand and alrsilt using all variables 8 plus others
+
+covariates
+```{r}
+sol496allcov <- read.csv("D:/metradica-soils/data/rf496allvar.csv")
+```
+
+```{r}
+env496.allvar <- sol496allcov[,9:25]
+```
+
+```{r}
+env496.allvar[,6:9] <- lapply(env496.allvar[,6:9], as.factor)
+env496.allvar[,13:14] <- lapply(env496.allvar[,13:14], as.factor)
+```
+redefing the tunegrid
+
+```{r}
+tuneGrid18 <- expand.grid(mtry = seq(from = 1, to = 17, by = 1))
+```
+
+
+
+
+Training an RF model for alrsand, using random CV
+```{r include=FALSE}
+rf.alrsand.496.random.allvar <- train(env496.allvar, res.alrsand, method = "cforest", metric = "Rsquared", controls = cforest_control(mtry = 0), trControl = ctrl.random, tuneGrid = tuneGrid18)
+rf.alrsand.496.random.allvar
+```
+
+Training an RF model for alrsilt, using random CV
+```{r include=FALSE}
+rf.alrsilt.496.random.allvar <- train(env496.allvar, res.alrsilt, method = "cforest", metric = "Rsquared", controls = cforest_control(mtry = 0), trControl = ctrl.random, tuneGrid = tuneGrid18)
+rf.alrsilt.496.random.allvar
+```
