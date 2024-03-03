@@ -434,7 +434,7 @@ saclay <- ggplot(data = claysa, aes(x = pre.sand496, y = yhat)) +
   xlim(17, 70) + ylim(17, 70)
 
 saclay
-ggsave(plot = saclay, device = "png", "saclay496scllrg.png", dpi = 900)
+ggsave(plot = saclay, device = "png", "C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/outputs/saclay496scllrg.png", dpi = 900)
 ```
 
 
