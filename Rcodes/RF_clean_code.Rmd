@@ -151,10 +151,10 @@ names(alt) <- "alt"
 
 regional elevation, hand index, slope and precipitation
 ```{r}
-rel <- rast("D:/repeated/rfquantat1km/raster1km/rel.tif")
-hd1 <- rast("D:/repeated/rfquantat1km/raster1km/hd1.tif")
-slo <- rast("D:/repeated/rfquantat1km/raster1km/slo.tif")
-rfc <- rast("D:/repeated/rfquantat1km/raster1km/rfc.tif")
+rel <- rast("C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/data/raster1km/rel.tif")
+hd1 <- rast("C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/data/raster1km/hd1.tif")
+slo <- rast("C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/data/raster1km/slo.tif")
+rfc <- rast("C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/data/raster1km/rfc.tif")
 ```
 ```{r}
 names(rel) <- "rel"
@@ -165,9 +165,9 @@ names(rfc) <- "rfc"
 
 geology, landscape and geomorphon variables
 ```{r}
-gos <- rast("D:/repeated/rfquantat1km/raster1km/gos9up.tif")
-lsc <- rast("D:/repeated/rfquantat1km/raster1km/lscup.tif")
-GM_100m <- rast("D:/repeated/rfquantat1km/raster1km/GM_100mup.tif")
+gos <- rast("C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/data/raster1km/gos9up.tif")
+lsc <- rast("C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/data/raster1km/lscup.tif")
+GM_100m <- rast("C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/data/raster1km/GM_100mup.tif")
 ```
 
 stacking the rasters of all predictors
