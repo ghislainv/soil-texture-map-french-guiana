@@ -175,6 +175,37 @@ stacking the rasters of all predictors
 ```{r}
 stack.sand <- c(alt, rel,rfc, hd1, slo,  gos, lsc, GM_100m)
 ```
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+determining aoa and di
+
+```{r include=FALSE}
+aoa_sand <- aoa(newdata = stack.sand, train = env496quant, model = rf.sand.496.random.mlrcv.quant, LPD = TRUE)
+```
+```{r}
+sand_di <- aoa_sand$DI
+sand_aoa <- aoa_sand$AOA
+sand_lpd <- aoa_sand$LPD
+```
+
+```{r}
+writeRaster(sand_di, "C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/outputs/sand_di2.tif")
+```
+
+```{r}
+writeRaster(sand_aoa, "C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/outputs/sand_aoa2.tif")
+```
+
+```{r}
+writeRaster(sand_lpd, "C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/outputs/sand_lpd.tif")
+```
+
+
+
+```{r}
+plot(aoa_sand$DI, main = " Sand RF Dissimilarity Index (DI)")
+plot(aoa_sand$AOA, main = "Sand RF Area of Applicability (AOA)")
+```
+
 
 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 predicitng sand over FG
@@ -191,6 +222,48 @@ names(sand496mlrcv.fg) <- "sand"
 ```{r}
 stack.clay.corsa <- c(alt, rel,rfc, hd1, slo,  gos, lsc, GM_100m, sand496mlrcv.fg)
 ```
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+determining aoa and di for clay model
+
+```{r}
+aoa_clay <- aoa(newdata = stack.clay.corsa, train = env496quant.corsa.mlrcv, model = rf.clay.496.random.quantmlrcv)
+```
+```{r}
+clay_di <- aoa_clay$DI
+clay_aoa <- aoa_clay$AOA
+```
+
+```{r}
+writeRaster(clay_di, "C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/outputs/clay_di.tif")
+```
+
+```{r}
+writeRaster(clay_aoa, "C:/Users/salma/OneDrive/Documents/soil-texture-map-french-guiana/outputs/clay_aoa.tif")
+```
+
+
+```{r}
+plot(aoa_clay$DI, main = "Clay RF Dissimilarity Index (DI)")
+plot(aoa_clay$AOA, main = "Clay Area of Applicability (AOA)")
+```
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+estimating the percntage area of applicatbility for sand and clay models
+
+```{r}
+aoa_percentage <- function(raster) {
+  vals <- values(raster)
+  valid_vals <- vals[!is.na(vals)]
+  round(sum(valid_vals == 1) / length(valid_vals) * 100, 2)}
+```
+
+```{r}
+aoa_percentage(clay_aoa)
+aoa_percentage(sand_aoa)
+```
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
 
 predicting clay over FG
 
