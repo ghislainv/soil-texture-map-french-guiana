@@ -1,0 +1,501 @@
+---
+title: "Soil MLR with predictors normalised"
+author: "Salman Khan, Ghislain Vieilledent"
+date: "2026-08-07"
+output: html_document
+---
+
+# Required libraries
+
+The following packages are installed (if not already available) and loaded. They cover data manipulation (`dplyr`, `tibble`), statistical modelling (`MASS`, `caret`, `regclass`), visualisation (`ggplot2`, `ggpmisc`, `ggrepel`), file handling (`readxl`, `here`) and utility functions (`caTools`, `glue`).
+
+```{r include=FALSE}
+# Install pak package first
+if (!("pak" %in% installed.packages())) {
+  install.packages("pak")
+}
+# Install other packages with pak
+pkgs <- c("MASS", "ggplot2", "dplyr", "ggpmisc", "readxl",
+          "caTools", "regclass", "glue", "tibble", "caret",
+          "here", "ggrepel")
+for (i in pkgs) {
+  cat("Installing package:", i, "\n")
+  if (!(i %in% installed.packages())) {
+    pak::pak(i)
+  }
+}
+```
+
+```{r include=FALSE}
+library(MASS)
+library(ggplot2)
+library(dplyr)
+library(ggpmisc)
+library(readxl)
+library(caTools)
+library(regclass)
+library(glue)
+library(tibble)
+library(caret)
+library(here)
+library(ggrepel)
+```
+
+---
+
+# 1. Data import and exploration
+
+## 1.1 Import input data
+
+The calibration dataset containing 198 soil samples with laboratory-measured sand, silt and clay percentages alongside field observations is imported from an Excel file.
+
+```{r}
+mlrinput <- read_excel(here("data/field198_mlr.xlsx"), sheet = 1)
+```
+
+## 1.2 Correlation between observed sand and clay percentages
+
+A scatter plot is produced to visualise the relationship between laboratory-measured sand and clay percentages. Points are coloured according to whether silt content exceeds 55%, and samples with high silt content are labelled by site name.
+
+```{r}
+corplot_sacl <- ggplot(mlrinput) +
+  geom_point(aes(x = clay, y = sand), color = ifelse(mlrinput$silt > 55, "green", "purple")) +
+  geom_abline(slope = -1, intercept = 100, linetype = "dashed") +
+  stat_poly_line(aes(x = clay, y = sand), color = "purple") +
+  stat_poly_eq(aes(x = clay, y = sand), label.x = "right", label.y = c(0.9, 0.85), color = "purple4", size = 10) +
+  labs(x = "Clay (%)", y = "Sand (%)") +
+  lims(x = c(0, 100), y = c(0, 100)) +
+  geom_text_repel(data = subset(mlrinput, silt > 55)[c(1, 3, 5),], aes(x = clay, y = sand, label = SITE), color = "black", size = 3.5) +
+  guides(color = "none") +
+  theme_bw(base_size = 15) +            # <-- base_size goes here
+  theme(
+    legend.position = c(0.85, 0.2),
+    legend.background = element_rect(fill = "white", color = "black"),
+    panel.grid = element_line(color = "gray", linetype = "dotted"),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.text = element_text(size = 13)
+  ) +
+  coord_fixed()
+
+ggsave(plot = corplot_sacl, device = "png", here("outputs/corplot_sacl.png"), dpi = 600)
+```
+
+---
+
+# 2. Data preprocessing: min-max normalisation of predictors
+
+## 2.1 Normalisation function (0–1 range)
+
+A general-purpose min-max normalisation function is defined. It can be applied either to a single numeric vector or to all columns of a data frame, rescaling values to the [0, 1] range.
+
+```{r}
+normalize <- function(x) {
+  if (is.data.frame(x)) {
+    x %>% 
+      mutate(across(everything(), ~ (.-min(.))/(max(.)-min(.)), .names = "norm_{.col}"))
+  } else {
+    (x - min(x)) / (max(x) - min(x))
+  }}
+```
+
+## 2.2 Normalisation of in-situ predictor variables (columns 10 to 16)
+
+The seven field observation variables used as predictors (columns 10 to 16) are normalised between 0 and 1 using min-max normalisation. The normalised versions are stored as new columns with the prefix `norm_`.
+
+```{r}
+mlrinput <- mlrinput %>%
+  mutate(across(10:16, ~ (.-min(.))/(max(.)-min(.)), .names = "norm_{.col}")) # min-max normalisation
+```
+
+---
+
+# 3. Cross-validation setup
+
+## 3.1 5-fold random cross-validation control
+
+A training control object is defined for 5-fold random cross-validation. This configuration will be used consistently across all MLR models to evaluate their predictive performance.
+
+```{r}
+mlrctrl <- trainControl(method = "cv", number = 5) 
+```
+
+---
+
+# 4. MLR model for sand prediction
+
+## 4.1 Define covariates for the sand model
+
+The seven normalised field observation variables are selected as predictors for the sand MLR model. These include colour rank estimates for clay, silt and sand, Munsell colour value and chroma, lithology and presence of a lateritic cuirass.
+
+```{r}
+mlrsand_cov <- c("norm_rankcl", "norm_ranksi", "norm_ranksa", "norm_value", "norm_chroma", "norm_lith", "norm_cuirass")
+```
+
+## 4.2 Build model formula
+
+The model formula is constructed dynamically by concatenating the covariate names into a regression formula with sand content as the response variable.
+
+```{r}
+formula_mlrsand <- as.formula(paste("sand ~", paste(mlrsand_cov, collapse = " + ")))
+```
+
+## 4.3 Train sand model using stepwise AIC with 5-fold CV
+
+The sand MLR model is trained using a stepwise variable selection procedure based on the Akaike Information Criterion (AIC). Model performance is evaluated through 5-fold cross-validation.
+
+```{r}
+mlrsand_model <- train(formula_mlrsand, data = mlrinput, method = "lmStepAIC", trControl = mlrctrl)
+summary(mlrsand_model)
+```
+
+---
+
+# 5. MLR model for clay prediction
+
+## 5.1 Normalise predicted sand values for use as a covariate
+
+Observed sand content is normalised and added as an additional predictor in the clay model. Including sand as a covariate allows the clay model to account for the compositional constraint between texture fractions.
+
+```{r}
+mlrinput$norm_sand <- normalize(mlrinput$sand)
+```
+
+## 5.2 Define covariates for the clay model
+
+The covariate set for the clay model extends the sand model covariates by including the normalised sand content as an additional predictor.
+
+```{r}
+mlrclay_cov <- c("norm_sand", "norm_rankcl", "norm_ranksi", "norm_ranksa", "norm_value", "norm_chroma", "norm_lith", "norm_cuirass")
+```
+
+## 5.3 Build model formula
+
+The model formula for clay prediction is constructed dynamically in the same way as for the sand model.
+
+```{r}
+formula_mlrclay <- as.formula(paste("clay ~", paste(mlrclay_cov, collapse = " + ")))
+```
+
+## 5.4 Train clay model using stepwise AIC with 5-fold CV
+
+The clay MLR model is trained using the same stepwise AIC procedure and 5-fold cross-validation as the sand model.
+
+```{r}
+mlrclay_model <- train(formula_mlrclay, data = mlrinput, method = "lmStepAIC", trControl = mlrctrl)
+summary(mlrclay_model)
+```
+
+---
+
+# 6. Predictions and silt estimation on the 198-point dataset
+
+## 6.1 Predict sand and clay at 198 points
+
+The trained sand and clay models are applied to the 198-point calibration dataset to generate in-sample predictions.
+
+```{r}
+mlrinput$pred_sand <- predict(mlrsand_model, mlrinput)
+```
+
+```{r}
+mlrinput$pred_clay <- predict(mlrclay_model, mlrinput)
+```
+
+## 6.2 Correlation between predicted and observed values
+
+Pearson correlation coefficients are computed between predicted and observed values for sand and clay to assess the overall fit of each model.
+
+```{r}
+cor(mlrinput$sand, mlrinput$pred_sand)
+cor(mlrinput$clay, mlrinput$pred_clay)
+```
+
+## 6.3 Silt estimation as the residual from 100%
+
+Silt content is estimated as the residual fraction: `100 - predicted sand - predicted clay`. Because this calculation can occasionally yield negative silt values, a constant offset based on the minimum observed sum is added to ensure all silt estimates remain positive.
+
+```{r}
+min_sum <- min(100 - mlrinput$pred_sand - mlrinput$pred_clay)
+mlrinput$diffsi <- ceiling(100 - min_sum) - mlrinput$pred_sand - mlrinput$pred_clay
+```
+
+---
+
+# 7. Adjustment of texture fractions to sum to 100%
+
+Since the three predicted components do not necessarily sum to exactly 100%, each fraction is adjusted proportionally according to its relative weight within each sample. This ensures the compositional constraint (sand + silt + clay = 100%) is satisfied.
+
+## 7.1 Compute weights per component
+
+The relative weight of each texture fraction within each sample is computed as its proportion of the total predicted sum.
+
+```{r}
+sumpred <- mlrinput$pred_clay + mlrinput$pred_sand + mlrinput$diffsi
+difference <- 100 - sumpred
+weight_sand <- mlrinput$pred_sand/sumpred
+weight_clay <- mlrinput$pred_clay/sumpred
+weight_diffsilt <- mlrinput$diffsi/sumpred
+```
+
+## 7.2 Apply proportional adjustment
+
+The difference between 100% and the predicted sum is redistributed across the three fractions in proportion to their respective weights, yielding adjusted texture values.
+
+```{r}
+mlrinput$adj_sa <- mlrinput$pred_sand + (difference*weight_sand)
+mlrinput$adj_cl <- mlrinput$pred_clay + (difference*weight_clay)
+mlrinput$adj_diffsi <- mlrinput$diffsi + (difference*weight_diffsilt)
+```
+
+## 7.3 Verify that adjusted fractions sum to 100%
+
+A simple check is performed to confirm that the three adjusted texture fractions sum to exactly 100% for all samples.
+
+```{r}
+mlrinput$adj_sa + mlrinput$adj_cl + mlrinput$adj_diffsi
+```
+
+## 7.4 Cross-validation of silt estimates
+
+A simple linear regression model with 5-fold cross-validation is fitted to evaluate the correspondence between the adjusted silt estimates and the laboratory-measured silt values.
+
+```{r include=FALSE}
+formula_silt <- as.formula("silt ~ adj_diffsi")
+model_silt <- train(formula_silt, data = mlrinput, method = "lm", trControl = mlrctrl)
+summary(model_silt)
+```
+
+---
+
+# 8. Model performance metrics and visualisation
+
+## 8.1 Extract R² and RMSE from cross-validation results
+
+The R² and RMSE values obtained from the 5-fold cross-validation are extracted for the sand, clay and silt models and rounded to two decimal places for reporting.
+
+```{r}
+r2mlrsand <- round(mlrsand_model$results$Rsquared, 2)
+r2mlrcl_sa<- round(mlrclay_model$results$Rsquared, 2)
+r2si_diffcv <- round(model_silt$results$Rsquared, 2)
+```
+
+```{r}
+rmse_sa_cv <- round(mlrsand_model$results$RMSE, 2)
+rmse_cl_cv <- round(mlrclay_model$results$RMSE, 2)
+rmse_adjsi_cv <- round(model_silt$results$RMSE, 2)
+```
+
+## 8.2 Helper functions for formatting statistics
+
+Two helper functions are defined to format numeric statistics with consistent width and number of decimal places for use in plot annotations.
+
+```{r}
+form_stat5 <- function(x) {
+  format(x, nsmall=2, width=5, justify="right")
+}
+form_stat4 <- function(x) {
+  format(x, nsmall=2, width=4, justify="right")
+}
+```
+
+## 8.3 Plot predicted vs. observed values for sand, clay and silt
+
+A combined scatter plot is produced showing predicted versus observed values for all three texture fractions. Cross-validation R² and RMSE statistics are annotated directly on the plot for each fraction.
+
+```{r}
+combined_plotmlrnorcv <- ggplot(mlrinput) +
+  geom_point(aes(x = adj_sa,     y = sand, color = "Sand")) +
+  geom_point(aes(x = adj_cl,     y = clay, color = "Clay")) +
+  geom_point(aes(x = adj_diffsi, y = silt, color = "Silt")) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  stat_poly_line(aes(x = adj_sa,     y = sand), color = "blue") +
+  stat_poly_line(aes(x = adj_cl,     y = clay), color = "red") +
+  stat_poly_line(aes(x = adj_diffsi, y = silt), color = "green") +
+  annotate("text", x = 80, y = 100, label = paste("R² =", form_stat4(r2mlrsand)),   color = "blue",      size = 5, hjust = 0) +
+  annotate("text", x = 0,  y = 100, label = paste("RMSE =", form_stat5(rmse_sa_cv), "%"), color = "blue",      size = 5, hjust = 0) +
+  annotate("text", x = 80, y = 94,  label = paste("R² =", form_stat4(r2mlrcl_sa)),  color = "red",       size = 5, hjust = 0) +
+  annotate("text", x = 0,  y = 94,  label = paste("RMSE =", form_stat5(rmse_cl_cv), "%"), color = "red",       size = 5, hjust = 0) +
+  annotate("text", x = 80, y = 88,  label = paste("R² =", form_stat4(r2si_diffcv)), color = "green", size = 5, hjust = 0) +
+  annotate("text", x = 0,  y = 88,  label = paste("RMSE =", form_stat5(rmse_adjsi_cv), "%"), color = "green", size = 5, hjust = 0) +
+  labs(x = "Predicted using MLR (%)", y = "Observed (%)") +
+  lims(x = c(0, 100), y = c(0, 100)) +
+  # values et labels dans l'ordre alphabétique : Clay, Sand, Silt
+  scale_color_manual(
+    name   = "Component",
+    values = c("Clay" = "red", "Sand" = "blue", "Silt" = "green"),
+    labels = c("Clay", "Sand", "Silt")
+  ) +
+  theme_bw(base_size = 15) +
+  theme(
+    legend.position    = c(0.85, 0.2),
+    legend.background  = element_rect(fill = "white", color = "black"),
+    panel.grid         = element_line(color = "gray", linetype = "dotted"),
+    axis.text          = element_text(size = 12),
+    axis.title         = element_text(size = 14),
+    legend.text        = element_text(size = 13)
+  ) +
+  coord_fixed()
+
+ggsave(plot = combined_plotmlrnorcv, device = "png",
+       here("outputs/combined_plotmlrnorcv_adjnorm.png"),
+       dpi = 600)
+```
+
+---
+
+# 9. Prediction at all 2810 in-situ observation points
+
+## 9.1 Import the full 2810-point dataset
+
+The complete dataset of 2810 in-situ observations is imported. This dataset covers the full spatial extent of the study area and will be used to generate texture predictions across all surveyed soil profiles.
+
+```{r}
+insitu2810 <- read_excel(here("data/field2810.xlsx"), sheet = 1)
+```
+
+## 9.2 Rename columns
+
+The first two columns are renamed to `IDSOIL` and `SITE` for consistency with the calibration dataset.
+
+```{r}
+insitu2810 <- insitu2810 %>%
+  rename(IDSOIL = 1, SITE = 2)
+```
+
+## 9.3 Select relevant columns
+
+Only the columns needed for prediction are retained: the soil profile identifier, site name, borehole identifier, layer number, and the seven field observation variables used as predictors.
+
+```{r}
+insitu2810_select <- insitu2810 %>%
+  dplyr::select(IDSOIL, SITE, SONDAGE, lyr, rankcl, ranksi, ranksa, value, chroma, lith, cuirass)
+```
+
+## 9.4 Normalise predictor variables
+
+The seven predictor variables are normalised between 0 and 1 using min-max normalisation, consistently with the preprocessing applied to the calibration dataset.
+
+```{r}
+insitu2810_select <- insitu2810_select %>%
+  mutate(across(5:11, ~ (.-min(.))/(max(.)-min(.)), .names = "norm_{.col}")) # min-max normalisation
+```
+
+## 9.5 Predict sand at 2810 points
+
+The trained sand model is applied to the full 2810-point dataset to generate sand content predictions for each soil layer.
+
+```{r}
+insitu2810_select$pred_sand <- predict(mlrsand_model, insitu2810_select)
+```
+
+## 9.6 Normalise predicted sand for use as covariate in clay model
+
+The predicted sand values are normalised and added as a covariate before running the clay model, following the same approach used during model calibration.
+
+```{r}
+insitu2810_select$norm_sand <- normalize(insitu2810_select$pred_sand)
+```
+
+## 9.7 Predict clay at 2810 points
+
+The trained clay model is applied to the full dataset, using both the normalised field observations and the normalised predicted sand content as predictors.
+
+```{r}
+insitu2810_select$pred_clay <- predict(mlrclay_model, insitu2810_select)
+```
+
+## 9.8 Estimate silt as the residual fraction
+
+Silt content is estimated for each observation as the residual fraction: `100 - predicted sand - predicted clay`.
+
+```{r}
+insitu2810_select$diff_silt <- 100 - insitu2810_select$pred_sand - insitu2810_select$pred_clay
+```
+
+---
+
+# 10. Depth-weighted average of texture fractions per soil profile
+
+## 10.1 Assign depth (cm) to each soil layer
+
+A depth value in centimetres is assigned to each layer based on its layer number, reflecting the thickness of each horizon in the soil profile description protocol.
+
+```{r}
+insitu2810_select <- insitu2810_select %>%
+  mutate(lyr_dep = case_when(lyr == 1 ~ 100, lyr == 2 ~ 100, lyr == 3 ~ 200, lyr == 4 ~ 200, lyr == 5 ~ 200, lyr == 6 ~ 200, lyr == 7 ~ 200))
+```
+
+## 10.2 Compute total depth per soil profile
+
+The total depth of each soil profile is computed by summing the depths of all its constituent layers.
+
+```{r}
+insitu2810_select <- insitu2810_select %>%
+  group_by(IDSOIL) %>%
+  mutate(tot_dep = sum(lyr_dep, na.rm = TRUE))
+```
+
+## 10.3 Compute relative weight of each layer
+
+The relative contribution of each layer to the total profile depth is computed and used as a weighting factor for the depth-weighted averages.
+
+```{r}
+insitu2810_select$wt_lyr <- insitu2810_select$lyr_dep / insitu2810_select$tot_dep
+```
+
+## 10.4 Compute depth-weighted average of sand, silt and clay per soil profile
+
+Depth-weighted averages of predicted sand, silt and clay contents are computed for each soil profile, yielding a single representative texture value per profile.
+
+```{r}
+avg_IDSOIL <- insitu2810_select %>%
+  group_by(IDSOIL, SONDAGE, SITE) %>%
+  summarise(avg_sand = weighted.mean(pred_sand, wt = wt_lyr, na.rm = TRUE), avg_silt = weighted.mean(diff_silt, wt = wt_lyr, na.rm = TRUE), avg_clay = weighted.mean(pred_clay, wt = wt_lyr, na.rm = TRUE))
+```
+
+---
+
+# 11. Export results with UTM coordinates
+
+## 11.1 Merge with UTM coordinates
+
+The depth-weighted texture averages are merged with the UTM coordinates from the original dataset to enable spatial mapping of the predicted texture values.
+
+```{r}
+avg_IDSOIL_utm <- merge(avg_IDSOIL, insitu2810[, c("IDSOIL", "xutm22N", "yutm22N")], by = "IDSOIL", all.x = TRUE)
+```
+
+## 11.2 Remove duplicate profiles
+
+Duplicate entries arising from the merge operation are removed, retaining only one record per soil profile.
+
+```{r}
+avg_IDSOIL_utm <- avg_IDSOIL_utm[!duplicated(avg_IDSOIL_utm$IDSOIL), ]
+```
+
+## 11.3 Convert coordinates to numeric
+
+The UTM coordinate columns are explicitly converted to numeric format to ensure compatibility with spatial analysis tools.
+
+```{r}
+avg_IDSOIL_utm$xutm22N <- as.numeric(avg_IDSOIL_utm$xutm22N)
+avg_IDSOIL_utm$yutm22N <- as.numeric(avg_IDSOIL_utm$yutm22N)
+```
+
+## 11.4 Remove profiles with missing coordinates
+
+Soil profiles lacking valid UTM coordinates are removed from the dataset, as they cannot be used for spatial mapping.
+
+```{r}
+sol421_utm <- avg_IDSOIL_utm %>%
+  filter(complete.cases(xutm22N, yutm22N))
+```
+
+## 11.5 Save final output to CSV
+
+The final dataset, containing depth-weighted texture predictions and UTM coordinates for all valid soil profiles, is saved as a CSV file for use in subsequent spatial analyses.
+
+```{r}
+write.csv(sol421_utm, here("outputs/sol421_utm.csv"))
+```
